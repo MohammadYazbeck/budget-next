@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:17
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: budget_admin
+      POSTGRES_PASSWORD: budget_admin_password
+      POSTGRES_DB: budget_app
+    volumes:
+      - budget_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  budget_postgres_data:

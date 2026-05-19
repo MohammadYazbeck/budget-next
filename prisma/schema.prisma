@@ -1,0 +1,108 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Client {
+  id           String        @id @default(cuid())
+  name         String
+  monthlyFee   Decimal       @db.Decimal(12, 2)
+  dueDay       Int
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+  liabilities  Liability[]
+
+  @@index([isActive])
+}
+
+model FixedCost {
+  id        String    @id @default(cuid())
+  name      String
+  category  String
+  amount    Decimal   @db.Decimal(12, 2)
+  cycle     CostCycle
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([isActive])
+  @@index([category])
+}
+
+model Transaction {
+  id               String          @id @default(cuid())
+  type             TransactionType
+  date             DateTime        @db.Date
+  amount           Decimal         @db.Decimal(12, 2)
+  category         String
+  method           PaymentMethod
+  submittedBy      String?
+  note             String?
+  clientId         String?
+  client           Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  liabilityPayment Liability?      @relation("LiabilityPayment")
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([date])
+  @@index([clientId])
+  @@index([type])
+  @@index([category])
+  @@index([submittedBy])
+}
+
+model Liability {
+  id                   String          @id @default(cuid())
+  name                 String
+  category             String
+  amount               Decimal         @db.Decimal(12, 2)
+  dueDate              DateTime        @db.Date
+  note                 String?
+  status               LiabilityStatus @default(OPEN)
+  paidDate             DateTime?       @db.Date
+  clientId             String?
+  client               Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  paymentTransactionId String?         @unique
+  paymentTransaction   Transaction?    @relation("LiabilityPayment", fields: [paymentTransactionId], references: [id], onDelete: SetNull)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  @@index([dueDate])
+  @@index([status])
+  @@index([clientId])
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  PARTNER
+}
+
+enum CostCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  BANK
+  OTHER
+}
+
+enum LiabilityStatus {
+  OPEN
+  PAID
+}
