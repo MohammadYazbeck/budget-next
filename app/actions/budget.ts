@@ -29,6 +29,8 @@ const transactionTypeSchema = z.enum(["INCOME", "EXPENSE", "PARTNER"]);
 const paymentMethodSchema = z.enum(["CASH", "TRANSFER", "BANK", "OTHER"]);
 const costCycleSchema = z.enum(["MONTHLY", "YEARLY"]);
 const liabilityStatusSchema = z.enum(["OPEN", "PAID"]);
+const fixedCostTransactionNotePrefix =
+  "\u062a\u0648\u0644\u064a\u062f \u0645\u0635\u0627\u0631\u064a\u0641 \u062b\u0627\u0628\u062a\u0629";
 
 const transactionCategorySchema = z.string().refine(
   (category) =>
@@ -200,6 +202,7 @@ const importClientSchema = z
     name: importRequiredStringSchema,
     monthlyFee: importNonNegativeMoneySchema,
     dueDay: z.coerce.number().int().min(1).max(31),
+    note: importOptionalStringSchema,
     isActive: importBooleanSchema,
   })
   .passthrough();
@@ -320,6 +323,7 @@ export async function createClientAction(formData: FormData) {
       name: z.string().trim().min(1),
       monthlyFee: moneySchema,
       dueDay: z.coerce.number().int().min(1).max(31),
+      note: z.string().trim().optional(),
     })
     .parse(formEntries(formData));
 
@@ -328,6 +332,7 @@ export async function createClientAction(formData: FormData) {
       name: input.name,
       monthlyFee: centsToDecimalString(moneyToCents(input.monthlyFee)),
       dueDay: input.dueDay,
+      note: input.note || null,
     },
   });
 
@@ -342,6 +347,7 @@ export async function updateClientAction(formData: FormData) {
       name: z.string().trim().min(1),
       monthlyFee: moneySchema,
       dueDay: z.coerce.number().int().min(1).max(31),
+      note: z.string().trim().optional(),
     })
     .parse(formEntries(formData));
 
@@ -351,7 +357,24 @@ export async function updateClientAction(formData: FormData) {
       name: input.name,
       monthlyFee: centsToDecimalString(moneyToCents(input.monthlyFee)),
       dueDay: input.dueDay,
+      note: input.note || null,
     },
+  });
+
+  refresh(input.returnTo);
+}
+
+export async function clearClientNoteAction(formData: FormData) {
+  const input = z
+    .object({
+      returnTo: returnToSchema,
+      id: idSchema,
+    })
+    .parse(formEntries(formData));
+
+  await db.client.update({
+    where: { id: input.id },
+    data: { note: null },
   });
 
   refresh(input.returnTo);
@@ -452,7 +475,7 @@ export async function generateFixedCostTransactionsAction(formData: FormData) {
 
   await db.$transaction(async (tx) => {
     for (const cost of fixedCosts) {
-      const note = `توليد مصاريف ثابتة ${input.month}: ${cost.name}`;
+      const note = fixedCostTransactionNote(input.month, cost.name);
       const existing = await tx.transaction.findFirst({
         where: {
           type: "EXPENSE",
@@ -482,6 +505,61 @@ export async function generateFixedCostTransactionsAction(formData: FormData) {
         },
       });
     }
+  });
+
+  refresh(input.returnTo);
+}
+
+export async function payFixedCostAction(formData: FormData) {
+  const input = z
+    .object({
+      returnTo: returnToSchema,
+      id: idSchema,
+      month: monthKeySchema,
+      submittedBy: z.string().trim().min(1),
+    })
+    .parse(formEntries(formData));
+  const date = dateKeyToDate(`${input.month}-01`);
+
+  await db.$transaction(async (tx) => {
+    const cost = await tx.fixedCost.findUnique({ where: { id: input.id } });
+
+    if (!cost) {
+      throw new Error("Fixed cost was not found.");
+    }
+    if (!cost.isActive) {
+      throw new Error("Cannot pay an inactive fixed cost.");
+    }
+
+    const note = fixedCostTransactionNote(input.month, cost.name);
+    const existing = await tx.transaction.findFirst({
+      where: {
+        type: "EXPENSE",
+        date,
+        category: cost.category,
+        note,
+      },
+      select: { id: true },
+    });
+
+    if (existing) return;
+
+    const monthlyCents =
+      cost.cycle === "YEARLY"
+        ? Math.round(moneyToCents(cost.amount) / 12)
+        : moneyToCents(cost.amount);
+
+    await tx.transaction.create({
+      data: {
+        type: "EXPENSE",
+        date,
+        amount: centsToDecimalString(monthlyCents),
+        category: cost.category,
+        method: "CASH",
+        submittedBy: input.submittedBy,
+        note,
+      },
+    });
   });
 
   refresh(input.returnTo);
@@ -622,6 +700,10 @@ function parseImportBudget(raw: unknown): ImportBudget {
   return importBudgetSchema.parse(root.data ?? raw);
 }
 
+function fixedCostTransactionNote(month: string, costName: string) {
+  return `${fixedCostTransactionNotePrefix} ${month}: ${costName}`;
+}
+
 async function replaceBudgetData(imported: ImportBudget) {
   await db.$transaction(async (tx) => {
     await tx.liability.deleteMany();
@@ -638,6 +720,7 @@ async function replaceBudgetData(imported: ImportBudget) {
           name: client.name,
           monthlyFee: client.monthlyFee,
           dueDay: client.dueDay,
+          note: client.note,
           isActive: client.isActive,
         },
         select: { id: true },

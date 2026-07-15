@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import {
+  clearClientNoteAction,
   createClientAction,
   createFixedCostAction,
   createLiabilityAction,
@@ -9,6 +10,7 @@ import {
   deleteTransactionAction,
   generateFixedCostTransactionsAction,
   importLegacyJsonAction,
+  payFixedCostAction,
   payLiabilityAction,
   toggleClientAction,
   toggleFixedCostAction,
@@ -128,8 +130,9 @@ export default async function Home({
       {view === "transactions" && (
         <TransactionsView
           clients={data.clients}
+          periodLabel={model.selectedLabel}
           returnTo={returnTo}
-          transactions={data.transactions}
+          transactions={model.periodTransactions}
         />
       )}
       {view === "clients" && <ClientsView model={model} returnTo={returnTo} />}
@@ -250,6 +253,11 @@ function buildReadModel(
     calcTransactions,
     selectedMonth,
   );
+  const clientReportsForPeriod = clientReports(data.clients, periodTransactions);
+  const clientRemainingTotalCents = clientReportsForPeriod.reduce(
+    (sum, report) => sum + report.remainingCents,
+    0,
+  );
 
   return {
     ...data,
@@ -270,11 +278,12 @@ function buildReadModel(
     collection,
     openLiabilitiesCount: openLiabilities.length,
     openLiabilitiesCents,
+    clientRemainingTotalCents,
     expectedFixedCostCents,
     projectedNetAfterFixedCents: periodTotals.netCents - expectedFixedCostCents,
     dailySummaries,
     categoryTotals: categoryTotals(periodTransactions),
-    clientReports: clientReports(data.clients, periodTransactions),
+    clientReports: clientReportsForPeriod,
     dailyRows: dailyRows(periodTransactions),
   };
 }
@@ -534,10 +543,12 @@ function DailyChart({ model }: { model: ReturnType<typeof buildReadModel> }) {
 
 function TransactionsView({
   clients,
+  periodLabel,
   returnTo,
   transactions,
 }: {
   clients: Prisma.ClientGetPayload<object>[];
+  periodLabel: string;
   returnTo: string;
   transactions: TransactionWithClient[];
 }) {
@@ -612,20 +623,23 @@ function TransactionsView({
         </form>
       </Panel>
 
-      <TransactionsTable returnTo={returnTo} transactions={transactions} />
+      <TransactionsTable periodLabel={periodLabel} returnTo={returnTo} transactions={transactions} />
     </div>
   );
 }
 
 function TransactionsTable({
+  periodLabel,
   returnTo,
   transactions,
 }: {
+  periodLabel: string;
   returnTo: string;
   transactions: TransactionWithClient[];
 }) {
   return (
     <Panel title="آخر الحركات" subtitle={`${transactions.length} حركة`}>
+      <p className="mb-3 text-sm font-bold text-slate-500">{periodLabel}</p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1040px] border-collapse text-sm">
           <thead>
@@ -714,11 +728,18 @@ function ClientsView({
           <FormField label="يوم الدفع المتوقع">
             <input name="dueDay" type="number" min="1" max="31" required className={fieldClassName} />
           </FormField>
+          <FormField label="ملاحظة">
+            <input name="note" className={fieldClassName} />
+          </FormField>
           <button type="submit" className={primaryButtonClassName}>
             إضافة زبون
           </button>
         </form>
       </Panel>
+
+      <div className="grid grid-cols-1 gap-4">
+        <SummaryCard label="إجمالي المتبقي على الزبائن" value={formatCents(model.clientRemainingTotalCents)} />
+      </div>
 
       <div className="grid grid-cols-3 gap-4 max-xl:grid-cols-2 max-md:grid-cols-1">
         {model.clients.map((client) => {
@@ -736,6 +757,8 @@ function ClientsView({
               <Metric label="المتبقي" value={formatCents(report?.remainingCents ?? 0)} />
               <Metric label="تكاليف مباشرة" value={formatCents(report?.costCents ?? 0)} />
               <Metric label="الصافي المباشر" value={formatCents(report?.netCents ?? 0)} />
+
+              <Metric label="ملاحظة" value={client.note ?? "-"} />
 
               <form action={updateClientAction} className="mt-4 grid gap-3">
                 <input type="hidden" name="returnTo" value={returnTo} />
@@ -767,10 +790,28 @@ function ClientsView({
                     />
                   </FormField>
                 </div>
+                <FormField label="ملاحظة">
+                  <textarea
+                    name="note"
+                    defaultValue={client.note ?? ""}
+                    rows={3}
+                    className={fieldClassName}
+                  />
+                </FormField>
                 <button type="submit" className={secondaryButtonClassName}>
                   حفظ التعديل
                 </button>
               </form>
+
+              {client.note ? (
+                <form action={clearClientNoteAction} className="mt-3">
+                  <input type="hidden" name="returnTo" value={returnTo} />
+                  <input type="hidden" name="id" value={client.id} />
+                  <button type="submit" className={dangerButtonClassName}>
+                    حذف الملاحظة
+                  </button>
+                </form>
+              ) : null}
 
               <form action={toggleClientAction} className="mt-3">
                 <input type="hidden" name="returnTo" value={returnTo} />
@@ -861,6 +902,22 @@ function FixedCostsView({
             <Metric label="المبلغ" value={formatCents(moneyToCents(cost.amount))} />
             <Metric label="محسوب شهريًا" value={formatCents(monthlyFixedCostCents(cost))} />
 
+            <form action={payFixedCostAction} className="mt-4 grid gap-3 rounded-lg border border-blue-100 bg-blue-50 p-3">
+              <input type="hidden" name="returnTo" value={returnTo} />
+              <input type="hidden" name="id" value={cost.id} />
+              <div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
+                <FormField label="شهر الدفع">
+                  <input name="month" type="month" required defaultValue={selectedMonth} className={fieldClassName} />
+                </FormField>
+                <FormField label="مدخل الحركة">
+                  <input name="submittedBy" required placeholder="اسم الشخص" className={fieldClassName} />
+                </FormField>
+              </div>
+              <button type="submit" className={primaryButtonClassName}>
+                دفع هذا المصروف
+              </button>
+            </form>
+
             <form action={updateFixedCostAction} className="mt-4 grid gap-3">
               <input type="hidden" name="returnTo" value={returnTo} />
               <input type="hidden" name="id" value={cost.id} />
@@ -926,9 +983,18 @@ function LiabilitiesView({
 }) {
   const open = liabilities.filter((liability) => liability.status !== "PAID");
   const paid = liabilities.filter((liability) => liability.status === "PAID");
+  const openTotalCents = open.reduce((sum, liability) => sum + moneyToCents(liability.amount), 0);
+  const paidTotalCents = paid.reduce((sum, liability) => sum + moneyToCents(liability.amount), 0);
+  const liabilityTotalCents = openTotalCents + paidTotalCents;
 
   return (
     <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-4 max-lg:grid-cols-1">
+        <SummaryCard label="إجمالي الالتزامات المفتوحة" value={formatCents(openTotalCents)} />
+        <SummaryCard label="إجمالي الالتزامات المدفوعة" value={formatCents(paidTotalCents)} />
+        <SummaryCard label="إجمالي كل الالتزامات" value={formatCents(liabilityTotalCents)} />
+      </div>
+
       <Panel title="إضافة Liability" subtitle="التزام قبل الدفع">
         <form action={createLiabilityAction} className="grid gap-4">
           <input type="hidden" name="returnTo" value={returnTo} />

@@ -32,6 +32,7 @@ export async function GET() {
       name: client.name,
       monthlyFee: client.monthlyFee.toString(),
       dueDay: client.dueDay,
+      note: client.note,
       isActive: client.isActive,
       createdAt: client.createdAt.toISOString(),
       updatedAt: client.updatedAt.toISOString(),

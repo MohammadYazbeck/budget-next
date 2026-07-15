@@ -18,6 +18,7 @@ model Client {
   name         String
   monthlyFee   Decimal       @db.Decimal(12, 2)
   dueDay       Int
+  note         String?
   isActive     Boolean       @default(true)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
