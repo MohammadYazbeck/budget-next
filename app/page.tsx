@@ -33,11 +33,13 @@ export const dynamic = "force-dynamic";
 
 type ViewKey = "dashboard" | "transactions" | "clients" | "fixedCosts" | "liabilities" | "reports";
 type FilterMode = "month" | "day";
+type TransactionSortKey = "date" | "type" | "client";
 type SearchParams = {
   view?: string;
   mode?: string;
   month?: string;
   day?: string;
+  transactionSort?: string;
   importSuccess?: string;
   importError?: string;
 };
@@ -72,6 +74,11 @@ const paymentMethodLabels = {
   BANK: "بنك",
   OTHER: "أخرى",
 } as const;
+const transactionSortLabels: Record<TransactionSortKey, string> = {
+  date: "الأحدث",
+  type: "حسب النوع",
+  client: "حسب الزبون",
+};
 
 const fieldClassName =
   "min-h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm text-slate-900";
@@ -94,6 +101,7 @@ export default async function Home({
     : monthKeyFromDateKey(selectedDate);
   const mode: FilterMode = params.mode === "day" ? "day" : "month";
   const view = normalizeView(params.view);
+  const transactionSort = normalizeTransactionSort(params.transactionSort);
 
   let data: PageData;
 
@@ -115,7 +123,13 @@ export default async function Home({
   }
 
   const model = buildReadModel(data, mode, selectedMonth, selectedDate);
-  const returnTo = hrefFor({ view, mode, selectedMonth, selectedDate });
+  const returnTo = hrefFor({
+    view,
+    mode,
+    selectedMonth,
+    selectedDate,
+    transactionSort: view === "transactions" ? transactionSort : undefined,
+  });
 
   return (
     <Shell
@@ -130,8 +144,12 @@ export default async function Home({
       {view === "transactions" && (
         <TransactionsView
           clients={data.clients}
+          mode={mode}
           periodLabel={model.selectedLabel}
           returnTo={returnTo}
+          selectedDate={selectedDate}
+          selectedMonth={selectedMonth}
+          sort={transactionSort}
           transactions={model.periodTransactions}
         />
       )}
@@ -543,13 +561,21 @@ function DailyChart({ model }: { model: ReturnType<typeof buildReadModel> }) {
 
 function TransactionsView({
   clients,
+  mode,
   periodLabel,
   returnTo,
+  selectedDate,
+  selectedMonth,
+  sort,
   transactions,
 }: {
   clients: Prisma.ClientGetPayload<object>[];
+  mode: FilterMode;
   periodLabel: string;
   returnTo: string;
+  selectedDate: string;
+  selectedMonth: string;
+  sort: TransactionSortKey;
   transactions: TransactionWithClient[];
 }) {
   return (
@@ -623,23 +649,64 @@ function TransactionsView({
         </form>
       </Panel>
 
-      <TransactionsTable periodLabel={periodLabel} returnTo={returnTo} transactions={transactions} />
+      <TransactionsTable
+        mode={mode}
+        periodLabel={periodLabel}
+        returnTo={returnTo}
+        selectedDate={selectedDate}
+        selectedMonth={selectedMonth}
+        sort={sort}
+        transactions={transactions}
+      />
     </div>
   );
 }
 
 function TransactionsTable({
+  mode,
   periodLabel,
   returnTo,
+  selectedDate,
+  selectedMonth,
+  sort,
   transactions,
 }: {
+  mode: FilterMode;
   periodLabel: string;
   returnTo: string;
+  selectedDate: string;
+  selectedMonth: string;
+  sort: TransactionSortKey;
   transactions: TransactionWithClient[];
 }) {
+  const sortedTransactions = sortTransactions(transactions, sort);
+
   return (
-    <Panel title="آخر الحركات" subtitle={`${transactions.length} حركة`}>
-      <p className="mb-3 text-sm font-bold text-slate-500">{periodLabel}</p>
+    <Panel title="آخر الحركات" subtitle={`${sortedTransactions.length} حركة`}>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-bold text-slate-500">{periodLabel}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          {(Object.keys(transactionSortLabels) as TransactionSortKey[]).map((sortKey) => (
+            <Link
+              key={sortKey}
+              href={hrefFor({
+                view: "transactions",
+                mode,
+                selectedMonth,
+                selectedDate,
+                transactionSort: sortKey,
+              })}
+              className={`inline-flex min-h-9 items-center rounded-lg px-3 text-xs font-black transition ${
+                sort === sortKey
+                  ? "bg-blue-700 text-white"
+                  : "bg-stone-100 text-slate-700 hover:bg-stone-200"
+              }`}
+            >
+              {transactionSortLabels[sortKey]}
+            </Link>
+          ))}
+        </div>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1040px] border-collapse text-sm">
           <thead>
@@ -656,8 +723,8 @@ function TransactionsTable({
             </tr>
           </thead>
           <tbody>
-            {transactions.length ? (
-              transactions.map((transaction) => {
+            {sortedTransactions.length ? (
+              sortedTransactions.map((transaction) => {
                 const impact = moneyToCents(transaction.amount);
                 const positive =
                   transaction.type === "INCOME" ||
@@ -1506,8 +1573,64 @@ function transactionTypeLabel(type: "INCOME" | "EXPENSE" | "PARTNER") {
   return type === "INCOME" ? "داخل" : type === "PARTNER" ? "شريك" : "خرج";
 }
 
+function sortTransactions(transactions: TransactionWithClient[], sort: TransactionSortKey) {
+  const sorted = [...transactions];
+
+  if (sort === "type") {
+    return sorted.sort((a, b) => {
+      const byType = compareArabicText(transactionTypeLabel(a.type), transactionTypeLabel(b.type));
+      if (byType !== 0) return byType;
+
+      const byClient = compareNullableClientNames(a.client?.name, b.client?.name);
+      if (byClient !== 0) return byClient;
+
+      return compareTransactionsByDateDesc(a, b);
+    });
+  }
+
+  if (sort === "client") {
+    return sorted.sort((a, b) => {
+      const byClient = compareNullableClientNames(a.client?.name, b.client?.name);
+      if (byClient !== 0) return byClient;
+
+      const byType = compareArabicText(transactionTypeLabel(a.type), transactionTypeLabel(b.type));
+      if (byType !== 0) return byType;
+
+      return compareTransactionsByDateDesc(a, b);
+    });
+  }
+
+  return sorted;
+}
+
+function compareNullableClientNames(a: string | null | undefined, b: string | null | undefined) {
+  const aName = a?.trim();
+  const bName = b?.trim();
+
+  if (aName && !bName) return -1;
+  if (!aName && bName) return 1;
+  if (!aName && !bName) return 0;
+
+  return compareArabicText(aName ?? "", bName ?? "");
+}
+
+function compareArabicText(a: string, b: string) {
+  return a.localeCompare(b, "ar", { sensitivity: "base" });
+}
+
+function compareTransactionsByDateDesc(a: TransactionWithClient, b: TransactionWithClient) {
+  const byDate = b.date.getTime() - a.date.getTime();
+  if (byDate !== 0) return byDate;
+
+  return b.createdAt.getTime() - a.createdAt.getTime();
+}
+
 function normalizeView(view: string | undefined): ViewKey {
   return views.some((item) => item.key === view) ? (view as ViewKey) : "dashboard";
+}
+
+function normalizeTransactionSort(sort: string | undefined): TransactionSortKey {
+  return sort === "type" || sort === "client" ? sort : "date";
 }
 
 function hrefFor({
@@ -1515,11 +1638,13 @@ function hrefFor({
   mode,
   selectedMonth,
   selectedDate,
+  transactionSort,
 }: {
   view: ViewKey;
   mode: FilterMode;
   selectedMonth: string;
   selectedDate: string;
+  transactionSort?: TransactionSortKey;
 }) {
   const params = new URLSearchParams({ view, mode });
 
@@ -1527,6 +1652,10 @@ function hrefFor({
     params.set("day", selectedDate);
   } else {
     params.set("month", selectedMonth);
+  }
+
+  if (view === "transactions" && transactionSort && transactionSort !== "date") {
+    params.set("transactionSort", transactionSort);
   }
 
   return `/?${params.toString()}`;
