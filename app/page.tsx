@@ -33,13 +33,19 @@ export const dynamic = "force-dynamic";
 
 type ViewKey = "dashboard" | "transactions" | "clients" | "fixedCosts" | "liabilities" | "reports";
 type FilterMode = "month" | "day";
-type TransactionSortKey = "date" | "type" | "client";
+type TransactionFilters = {
+  income: boolean;
+  expense: boolean;
+  customerSearch: string;
+};
 type SearchParams = {
   view?: string;
   mode?: string;
   month?: string;
   day?: string;
-  transactionSort?: string;
+  transactionIncome?: string;
+  transactionExpense?: string;
+  customerSearch?: string;
   importSuccess?: string;
   importError?: string;
 };
@@ -74,11 +80,6 @@ const paymentMethodLabels = {
   BANK: "بنك",
   OTHER: "أخرى",
 } as const;
-const transactionSortLabels: Record<TransactionSortKey, string> = {
-  date: "الأحدث",
-  type: "حسب النوع",
-  client: "حسب الزبون",
-};
 
 const fieldClassName =
   "min-h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm text-slate-900";
@@ -101,7 +102,7 @@ export default async function Home({
     : monthKeyFromDateKey(selectedDate);
   const mode: FilterMode = params.mode === "day" ? "day" : "month";
   const view = normalizeView(params.view);
-  const transactionSort = normalizeTransactionSort(params.transactionSort);
+  const transactionFilters = normalizeTransactionFilters(params);
 
   let data: PageData;
 
@@ -128,7 +129,7 @@ export default async function Home({
     mode,
     selectedMonth,
     selectedDate,
-    transactionSort: view === "transactions" ? transactionSort : undefined,
+    transactionFilters: view === "transactions" ? transactionFilters : undefined,
   });
 
   return (
@@ -144,12 +145,12 @@ export default async function Home({
       {view === "transactions" && (
         <TransactionsView
           clients={data.clients}
+          filters={transactionFilters}
           mode={mode}
           periodLabel={model.selectedLabel}
           returnTo={returnTo}
           selectedDate={selectedDate}
           selectedMonth={selectedMonth}
-          sort={transactionSort}
           transactions={model.periodTransactions}
         />
       )}
@@ -561,21 +562,21 @@ function DailyChart({ model }: { model: ReturnType<typeof buildReadModel> }) {
 
 function TransactionsView({
   clients,
+  filters,
   mode,
   periodLabel,
   returnTo,
   selectedDate,
   selectedMonth,
-  sort,
   transactions,
 }: {
   clients: Prisma.ClientGetPayload<object>[];
+  filters: TransactionFilters;
   mode: FilterMode;
   periodLabel: string;
   returnTo: string;
   selectedDate: string;
   selectedMonth: string;
-  sort: TransactionSortKey;
   transactions: TransactionWithClient[];
 }) {
   return (
@@ -650,12 +651,12 @@ function TransactionsView({
       </Panel>
 
       <TransactionsTable
+        filters={filters}
         mode={mode}
         periodLabel={periodLabel}
         returnTo={returnTo}
         selectedDate={selectedDate}
         selectedMonth={selectedMonth}
-        sort={sort}
         transactions={transactions}
       />
     </div>
@@ -663,50 +664,76 @@ function TransactionsView({
 }
 
 function TransactionsTable({
+  filters,
   mode,
   periodLabel,
   returnTo,
   selectedDate,
   selectedMonth,
-  sort,
   transactions,
 }: {
+  filters: TransactionFilters;
   mode: FilterMode;
   periodLabel: string;
   returnTo: string;
   selectedDate: string;
   selectedMonth: string;
-  sort: TransactionSortKey;
   transactions: TransactionWithClient[];
 }) {
-  const sortedTransactions = sortTransactions(transactions, sort);
+  const filteredTransactions = filterTransactions(transactions, filters);
 
   return (
-    <Panel title="آخر الحركات" subtitle={`${sortedTransactions.length} حركة`}>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm font-bold text-slate-500">{periodLabel}</p>
-        <div className="flex flex-wrap items-center gap-2">
-          {(Object.keys(transactionSortLabels) as TransactionSortKey[]).map((sortKey) => (
-            <Link
-              key={sortKey}
-              href={hrefFor({
-                view: "transactions",
-                mode,
-                selectedMonth,
-                selectedDate,
-                transactionSort: sortKey,
-              })}
-              className={`inline-flex min-h-9 items-center rounded-lg px-3 text-xs font-black transition ${
-                sort === sortKey
-                  ? "bg-blue-700 text-white"
-                  : "bg-stone-100 text-slate-700 hover:bg-stone-200"
-              }`}
-            >
-              {transactionSortLabels[sortKey]}
-            </Link>
-          ))}
+    <Panel title="آخر الحركات" subtitle={`${filteredTransactions.length} حركة`}>
+      <form method="get" className="mb-4 grid gap-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
+        <input type="hidden" name="view" value="transactions" />
+        <input type="hidden" name="mode" value={mode} />
+        {mode === "day" ? (
+          <input type="hidden" name="day" value={selectedDate} />
+        ) : (
+          <input type="hidden" name="month" value={selectedMonth} />
+        )}
+        <div className="grid grid-cols-[auto_auto_1fr_auto_auto] items-end gap-3 max-lg:grid-cols-1">
+          <label className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-black text-slate-700">
+            <input
+              type="checkbox"
+              name="transactionIncome"
+              value="1"
+              defaultChecked={filters.income}
+              className="h-4 w-4"
+            />
+            داخل
+          </label>
+          <label className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-black text-slate-700">
+            <input
+              type="checkbox"
+              name="transactionExpense"
+              value="1"
+              defaultChecked={filters.expense}
+              className="h-4 w-4"
+            />
+            خرج
+          </label>
+          <FormField label="بحث باسم الزبون">
+            <input
+              name="customerSearch"
+              type="search"
+              defaultValue={filters.customerSearch}
+              placeholder="اسم الزبون"
+              className={fieldClassName}
+            />
+          </FormField>
+          <button type="submit" className={secondaryButtonClassName}>
+            تطبيق
+          </button>
+          <Link
+            href={hrefFor({ view: "transactions", mode, selectedMonth, selectedDate })}
+            className="inline-flex min-h-10 items-center justify-center rounded-lg bg-stone-200 px-4 text-sm font-black text-slate-800 transition hover:bg-stone-300"
+          >
+            مسح
+          </Link>
         </div>
-      </div>
+        <p className="text-sm font-bold text-slate-500">{periodLabel}</p>
+      </form>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1040px] border-collapse text-sm">
           <thead>
@@ -723,8 +750,8 @@ function TransactionsTable({
             </tr>
           </thead>
           <tbody>
-            {sortedTransactions.length ? (
-              sortedTransactions.map((transaction) => {
+            {filteredTransactions.length ? (
+              filteredTransactions.map((transaction) => {
                 const impact = moneyToCents(transaction.amount);
                 const positive =
                   transaction.type === "INCOME" ||
@@ -1573,64 +1600,41 @@ function transactionTypeLabel(type: "INCOME" | "EXPENSE" | "PARTNER") {
   return type === "INCOME" ? "داخل" : type === "PARTNER" ? "شريك" : "خرج";
 }
 
-function sortTransactions(transactions: TransactionWithClient[], sort: TransactionSortKey) {
-  const sorted = [...transactions];
+function filterTransactions(transactions: TransactionWithClient[], filters: TransactionFilters) {
+  const hasTypeFilter = filters.income || filters.expense;
+  const customerQuery = normalizeSearchText(filters.customerSearch);
 
-  if (sort === "type") {
-    return sorted.sort((a, b) => {
-      const byType = compareArabicText(transactionTypeLabel(a.type), transactionTypeLabel(b.type));
-      if (byType !== 0) return byType;
+  return transactions.filter((transaction) => {
+    if (hasTypeFilter) {
+      if (transaction.type === "INCOME" && !filters.income) return false;
+      if (transaction.type === "EXPENSE" && !filters.expense) return false;
+      if (transaction.type === "PARTNER") return false;
+    }
 
-      const byClient = compareNullableClientNames(a.client?.name, b.client?.name);
-      if (byClient !== 0) return byClient;
+    if (customerQuery) {
+      const customerName = normalizeSearchText(transaction.client?.name ?? "");
 
-      return compareTransactionsByDateDesc(a, b);
-    });
-  }
+      if (!customerName.includes(customerQuery)) return false;
+    }
 
-  if (sort === "client") {
-    return sorted.sort((a, b) => {
-      const byClient = compareNullableClientNames(a.client?.name, b.client?.name);
-      if (byClient !== 0) return byClient;
-
-      const byType = compareArabicText(transactionTypeLabel(a.type), transactionTypeLabel(b.type));
-      if (byType !== 0) return byType;
-
-      return compareTransactionsByDateDesc(a, b);
-    });
-  }
-
-  return sorted;
+    return true;
+  });
 }
 
-function compareNullableClientNames(a: string | null | undefined, b: string | null | undefined) {
-  const aName = a?.trim();
-  const bName = b?.trim();
-
-  if (aName && !bName) return -1;
-  if (!aName && bName) return 1;
-  if (!aName && !bName) return 0;
-
-  return compareArabicText(aName ?? "", bName ?? "");
-}
-
-function compareArabicText(a: string, b: string) {
-  return a.localeCompare(b, "ar", { sensitivity: "base" });
-}
-
-function compareTransactionsByDateDesc(a: TransactionWithClient, b: TransactionWithClient) {
-  const byDate = b.date.getTime() - a.date.getTime();
-  if (byDate !== 0) return byDate;
-
-  return b.createdAt.getTime() - a.createdAt.getTime();
+function normalizeSearchText(value: string) {
+  return value.trim().toLocaleLowerCase("ar");
 }
 
 function normalizeView(view: string | undefined): ViewKey {
   return views.some((item) => item.key === view) ? (view as ViewKey) : "dashboard";
 }
 
-function normalizeTransactionSort(sort: string | undefined): TransactionSortKey {
-  return sort === "type" || sort === "client" ? sort : "date";
+function normalizeTransactionFilters(params: SearchParams): TransactionFilters {
+  return {
+    income: params.transactionIncome === "1",
+    expense: params.transactionExpense === "1",
+    customerSearch: params.customerSearch?.trim() ?? "",
+  };
 }
 
 function hrefFor({
@@ -1638,13 +1642,13 @@ function hrefFor({
   mode,
   selectedMonth,
   selectedDate,
-  transactionSort,
+  transactionFilters,
 }: {
   view: ViewKey;
   mode: FilterMode;
   selectedMonth: string;
   selectedDate: string;
-  transactionSort?: TransactionSortKey;
+  transactionFilters?: TransactionFilters;
 }) {
   const params = new URLSearchParams({ view, mode });
 
@@ -1654,8 +1658,12 @@ function hrefFor({
     params.set("month", selectedMonth);
   }
 
-  if (view === "transactions" && transactionSort && transactionSort !== "date") {
-    params.set("transactionSort", transactionSort);
+  if (view === "transactions" && transactionFilters) {
+    if (transactionFilters.income) params.set("transactionIncome", "1");
+    if (transactionFilters.expense) params.set("transactionExpense", "1");
+    if (transactionFilters.customerSearch) {
+      params.set("customerSearch", transactionFilters.customerSearch);
+    }
   }
 
   return `/?${params.toString()}`;
